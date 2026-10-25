@@ -38,14 +38,6 @@
 // ---------------------------------------------------------------------------
 
 import type { Database } from "bun:sqlite";
-import {
-  createSubstrateClient,
-  claimNextJob,
-  completeJob,
-  failJob,
-  releaseExpiredLeases,
-  type JobRow,
-} from "@genesis-works/substrate-db";
 import type { RuntimeConfig, SubstrateConfig, TaskInput, CanonicalOutcome, TaskRecord } from "./types";
 import { resolveCredentialRefs } from "./credentials";
 import { enqueueTask } from "./db";
@@ -58,7 +50,45 @@ export type SubstrateTickResult =
   | { claimed: false; reason?: string }
   | { claimed: true; jobId: string; taskId: string; epochUsed: number };
 
-export type SubstrateDb = ReturnType<typeof createSubstrateClient>;
+// @genesis-works/substrate-db is an optional dependency (#7): it is loaded on first use, so an
+// agent without a substrate config installs and runs without it. The specifier is a variable so
+// typecheck doesn't need the package either; the shapes below are the slice of its API used here.
+const SUBSTRATE_DB_MODULE = "@genesis-works/substrate-db";
+
+export type JobRow = {
+  id: string;
+  kind: string;
+  payload: unknown;
+  claim_epoch: number;
+};
+
+/** Opaque client handle from createSubstrateClient. */
+export type SubstrateDb = { readonly __substrateDb?: never } & object;
+
+type WriteResult = { ok: boolean };
+
+type SubstrateDbModule = {
+  createSubstrateClient(opts: { host: string; port: number; database: string; user: string; password: string }): SubstrateDb;
+  claimNextJob(db: SubstrateDb, slotId: string, kinds: string[], leaseSecs: number): Promise<JobRow | null>;
+  completeJob(db: SubstrateDb, jobId: string, result: Record<string, unknown>, extra: undefined, claimEpoch?: number): Promise<WriteResult>;
+  failJob(db: SubstrateDb, jobId: string, reason: string, claimEpoch?: number): Promise<WriteResult>;
+  releaseExpiredLeases(db: SubstrateDb): Promise<number>;
+};
+
+let substrateDbModule: Promise<SubstrateDbModule> | null = null;
+
+/** Loads @genesis-works/substrate-db once. A failed load is not cached, so a later tick retries. */
+export function loadSubstrateDb(): Promise<SubstrateDbModule> {
+  substrateDbModule ??= (import(SUBSTRATE_DB_MODULE) as Promise<SubstrateDbModule>).catch((err) => {
+    substrateDbModule = null;
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Substrate is enabled but ${SUBSTRATE_DB_MODULE} could not be loaded (${msg}). ` +
+        `Install it (optionalDependencies) or disable config.substrate.`
+    );
+  });
+  return substrateDbModule;
+}
 
 // ---------------------------------------------------------------------------
 // resolveSubstrateConfig
@@ -111,6 +141,7 @@ export async function createSubstrateConnection(
     throw new Error(`Substrate credential "${sub.credential}" resolved to empty value`);
   }
 
+  const { createSubstrateClient } = await loadSubstrateDb();
   return createSubstrateClient({
     host: sub.host,
     port: sub.port ?? 5432,
@@ -184,6 +215,7 @@ export async function runSubstrateIntakeTick(
   let job: JobRow | null = null;
 
   try {
+    const { claimNextJob } = await loadSubstrateDb();
     job = await claimNextJob(substrateDb, sub.slotId, sub.kinds, leaseSecs);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -269,6 +301,7 @@ export async function runSubstrateWriteBack(
   // releaseExpiredLeases reconciles on the next cycle.
   try {
     if (isSuccess) {
+      const { completeJob } = await loadSubstrateDb();
       const result = await completeJob(
         substrateDb,
         jobId,
@@ -292,6 +325,7 @@ export async function runSubstrateWriteBack(
       }
     } else {
       const reason = outcome.operator_summary.slice(0, 500);
+      const { failJob } = await loadSubstrateDb();
       const result = await failJob(substrateDb, jobId, reason, claimEpoch);
       if (result.ok) {
         console.info(`[substrate] fail jobs.id=${jobId} epoch=${claimEpoch ?? "none"} reason=${reason.slice(0, 100)}`);
@@ -313,6 +347,7 @@ export async function runSubstrateWriteBack(
 
 export async function runSubstrateLeaseRecovery(substrateDb: SubstrateDb): Promise<void> {
   try {
+    const { releaseExpiredLeases } = await loadSubstrateDb();
     const released = await releaseExpiredLeases(substrateDb);
     if (released > 0) {
       console.info(`[substrate] lease-recovery released=${released}`);
