@@ -139,14 +139,26 @@ fi
 # `bun install` does not install, and installing it with `bun add` would rewrite package.json
 # and bun.lock (dirty tree, next `git pull --ff-only` refuses). On boxes with the sibling
 # checkout, add it with --no-save: node_modules only, tracked files stay untouched.
-# Fatal only when this agent's config enables substrate (read with the runtime's own config
-# loader); otherwise a broken sibling checkout only warns, so the agent still restarts.
+# Whether substrate is active is read with the runtime's own config loader and
+# resolveSubstrateConfig, so the script agrees with what the agent will do. Anything but a
+# clean 1/0 from the probe (bad JSON, import error) stops the deploy with the probe's stderr.
+# When substrate is active, a missing sibling checkout or a failed install is fatal;
+# otherwise both only warn, so the agent still restarts.
+probe_err="$(mktemp)"
+substrate_enabled="$(AGENT_RUNTIME_CONFIG="$config" ~/.bun/bin/bun -e '
+  import { loadConfig } from "./src/config";
+  import { resolveSubstrateConfig } from "./src/substrate";
+  const { config } = await loadConfig(process.env.AGENT_RUNTIME_CONFIG || undefined);
+  console.log(resolveSubstrateConfig(config) !== null ? "1" : "0");
+' 2>"$probe_err")" || substrate_enabled=""
+if [[ "$substrate_enabled" != "1" && "$substrate_enabled" != "0" ]]; then
+  echo "ERROR: could not tell whether substrate is enabled in $config (probe printed '${substrate_enabled}'):" >&2
+  cat "$probe_err" >&2
+  rm -f "$probe_err"
+  exit 1
+fi
+rm -f "$probe_err"
 if [[ -d ../substrate-db ]]; then
-  substrate_enabled="$(~/.bun/bin/bun -e '
-    import { loadConfig } from "./src/config";
-    const { config } = await loadConfig(process.argv[1]);
-    console.log(config.substrate?.enabled === true ? "1" : "0");
-  ' "$config" 2>/dev/null || true)"
   if ! ~/.bun/bin/bun add --no-save ../substrate-db; then
     if [[ "$substrate_enabled" == "1" ]]; then
       echo "ERROR: substrate is enabled in $config but ../substrate-db could not be installed" >&2
@@ -154,6 +166,9 @@ if [[ -d ../substrate-db ]]; then
     fi
     echo "WARN: could not install ../substrate-db; substrate is not enabled, continuing" >&2
   fi
+elif [[ "$substrate_enabled" == "1" ]]; then
+  echo "ERROR: substrate is enabled in $config but ../substrate-db does not exist" >&2
+  exit 1
 fi
 ~/.bun/bin/bunx tsc --noEmit
 ~/.bun/bin/bun test
