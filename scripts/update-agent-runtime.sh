@@ -137,38 +137,41 @@ fi
 ~/.bun/bin/bun install
 # @genesis-works/substrate-db is an optionalDependency (file:../substrate-db) that a plain
 # `bun install` does not install, and installing it with `bun add` would rewrite package.json
-# and bun.lock (dirty tree, next `git pull --ff-only` refuses). On boxes with the sibling
-# checkout, add it with --no-save: node_modules only, tracked files stay untouched.
+# and bun.lock (dirty tree, next `git pull --ff-only` refuses). So it is added from the
+# sibling checkout with --no-save: node_modules only, tracked files stay untouched.
 # Whether substrate is active is read with the runtime's own config loader and
 # resolveSubstrateConfig, so the script agrees with what the agent will do. Anything but a
-# clean 1/0 from the probe (bad JSON, import error) stops the deploy with the probe's stderr.
-# When substrate is active, a missing sibling checkout or a failed install is fatal;
-# otherwise both only warn, so the agent still restarts.
+# clean 1/0 from the probe (bad JSON, import error) stops the deploy with the probe's output.
+# When substrate is active, a missing sibling checkout or a failed install is fatal; when it
+# is not, the module is not installed at all.
 probe_err="$(mktemp)"
+trap 'rm -f "$probe_err"' EXIT
+probe_status=0
 substrate_enabled="$(AGENT_RUNTIME_CONFIG="$config" ~/.bun/bin/bun -e '
   import { loadConfig } from "./src/config";
   import { resolveSubstrateConfig } from "./src/substrate";
   const { config } = await loadConfig(process.env.AGENT_RUNTIME_CONFIG || undefined);
-  console.log(resolveSubstrateConfig(config) !== null ? "1" : "0");
-' 2>"$probe_err")" || substrate_enabled=""
-if [[ "$substrate_enabled" != "1" && "$substrate_enabled" != "0" ]]; then
-  echo "ERROR: could not tell whether substrate is enabled in $config (probe printed '${substrate_enabled}'):" >&2
+  const active = resolveSubstrateConfig(config) !== null;
+  if (!active && config.substrate?.enabled === true) {
+    console.error("WARN: substrate.enabled is true but credential, kinds or slotId is empty; substrate stays off");
+  }
+  console.log(active ? "1" : "0");
+' 2>"$probe_err")" || probe_status=$?
+if [[ "$probe_status" -ne 0 || ( "$substrate_enabled" != "1" && "$substrate_enabled" != "0" ) ]]; then
+  echo "ERROR: could not tell whether substrate is enabled in $config (probe exit ${probe_status}, printed '${substrate_enabled}'):" >&2
   cat "$probe_err" >&2
-  rm -f "$probe_err"
   exit 1
 fi
-rm -f "$probe_err"
-if [[ -d ../substrate-db ]]; then
-  if ! ~/.bun/bin/bun add --no-save ../substrate-db; then
-    if [[ "$substrate_enabled" == "1" ]]; then
-      echo "ERROR: substrate is enabled in $config but ../substrate-db could not be installed" >&2
-      exit 1
-    fi
-    echo "WARN: could not install ../substrate-db; substrate is not enabled, continuing" >&2
+cat "$probe_err" >&2
+if [[ "$substrate_enabled" == "1" ]]; then
+  if [[ ! -d ../substrate-db ]]; then
+    echo "ERROR: substrate is enabled in $config but ../substrate-db does not exist" >&2
+    exit 1
   fi
-elif [[ "$substrate_enabled" == "1" ]]; then
-  echo "ERROR: substrate is enabled in $config but ../substrate-db does not exist" >&2
-  exit 1
+  if ! ~/.bun/bin/bun add --no-save ../substrate-db; then
+    echo "ERROR: substrate is enabled in $config but ../substrate-db could not be installed" >&2
+    exit 1
+  fi
 fi
 ~/.bun/bin/bunx tsc --noEmit
 ~/.bun/bin/bun test
