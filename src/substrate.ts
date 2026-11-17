@@ -9,6 +9,7 @@
 //   [substrate] complete jobs.id=<id> epoch=<n>
 //   [substrate] fail jobs.id=<id> epoch=<n> reason=<...>
 //   [substrate] lease-recovery released=<n>
+//   [substrate] skip reason=incomplete-config missing=<fields> (enabled but a required field is empty; once per process)
 //   [substrate] skip reason=module-missing error=<...>       (@genesis-works/substrate-db not installed)
 //   [substrate] skip reason=module-load-error error=<...>    (package installed but throws while loading)
 //   [substrate] skip reason=credential-fail error=<...>
@@ -164,13 +165,24 @@ export function resetSubstrateDbCache(): void {
 
 /** Names of the required substrate fields that are empty (enabled is checked separately). */
 export function missingSubstrateFields(sub: Partial<SubstrateConfig>): string[] {
-  const blank = (v: string | undefined) => !v || v.trim().length === 0;
+  const blank = (v: unknown) => typeof v !== "string" || v.trim().length === 0;
   const missing: string[] = [];
   if (blank(sub.credential)) missing.push("credential");
   if (!sub.kinds || sub.kinds.length === 0) missing.push("kinds");
   if (blank(sub.slotId)) missing.push("slotId");
   if (blank(sub.host)) missing.push("host");
   return missing;
+}
+
+/**
+ * The warning for "enabled but incomplete" (the case where resolveSubstrateConfig quietly returns null),
+ * or null when substrate is off or complete. Shared by the runtime log and the deploy probe.
+ */
+export function incompleteSubstrateWarning(config: RuntimeConfig): string | null {
+  const sub = config.substrate;
+  if (!sub || sub.enabled !== true) return null;
+  const missing = missingSubstrateFields(sub);
+  return missing.length > 0 ? `[substrate] skip reason=incomplete-config missing=${missing.join(",")}` : null;
 }
 
 /** Returns the validated SubstrateConfig, or null if substrate is disabled or incomplete. */
@@ -198,7 +210,8 @@ export async function createSubstrateConnection(
   // Host is REQUIRED when substrate is enabled — no implicit default to any private IP.
   // A misconfigured slot with substrate.enabled=true but no host would otherwise quietly
   // connect to whatever sits at the prior default; explicit host config is the safer floor.
-  if (!sub.host || sub.host.trim().length === 0) {
+  const host = sub.host;
+  if (typeof host !== "string" || host.trim().length === 0) { // same rule as missingSubstrateFields
     throw new Error(
       'Substrate enabled but substrate.host is not set — explicit host required (no implicit default).'
     );
@@ -219,7 +232,7 @@ export async function createSubstrateConnection(
   }
 
   return createSubstrateClient({
-    host: sub.host,
+    host,
     port: sub.port ?? 5432,
     database: sub.database ?? "substrate",
     user: sub.user ?? "substrate_app",

@@ -149,13 +149,11 @@ trap 'rm -f "$probe_err"' EXIT
 probe_status=0
 substrate_enabled="$(AGENT_RUNTIME_CONFIG="$config" ~/.bun/bin/bun -e '
   import { loadConfig } from "./src/config";
-  import { resolveSubstrateConfig, missingSubstrateFields } from "./src/substrate";
+  import { resolveSubstrateConfig, incompleteSubstrateWarning } from "./src/substrate";
   const { config } = await loadConfig(process.env.AGENT_RUNTIME_CONFIG || undefined);
   const active = resolveSubstrateConfig(config) !== null;
-  if (!active && config.substrate?.enabled === true) {
-    const missing = missingSubstrateFields(config.substrate).join(", ");
-    console.error(`WARN: substrate.enabled is true but these fields are empty: ${missing}; substrate stays off`);
-  }
+  const warning = incompleteSubstrateWarning(config);
+  if (warning) console.error(`WARN: ${warning}; substrate stays off`);
   console.log(active ? "1" : "0");
 ' 2>"$probe_err")" || probe_status=$?
 if [[ "$probe_status" -ne 0 || ( "$substrate_enabled" != "1" && "$substrate_enabled" != "0" ) ]]; then

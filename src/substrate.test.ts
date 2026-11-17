@@ -51,6 +51,7 @@ mock.module("@genesis-works/substrate-db", () => ({
 import {
   resolveSubstrateConfig,
   missingSubstrateFields,
+  incompleteSubstrateWarning,
   jobRowToTaskInput,
   createSubstrateConnection,
   loadSubstrateDb,
@@ -210,6 +211,21 @@ describe("resolveSubstrateConfig", () => {
     expect(
       missingSubstrateFields(makeSubConfig({ credential: "", kinds: [], slotId: " ", host: undefined }))
     ).toEqual(["credential", "kinds", "slotId", "host"]);
+  });
+
+  test("missingSubstrateFields treats non-string values as missing instead of throwing", () => {
+    const sub = makeSubConfig({ host: 5432 as unknown as string, slotId: null as unknown as string });
+    expect(missingSubstrateFields(sub)).toEqual(["slotId", "host"]);
+    expect(resolveSubstrateConfig(makeRuntimeConfig(sub))).toBeNull();
+  });
+
+  test("incompleteSubstrateWarning names missing fields only when enabled", () => {
+    expect(incompleteSubstrateWarning(makeRuntimeConfig())).toBeNull();
+    expect(incompleteSubstrateWarning(makeRuntimeConfig(makeSubConfig()))).toBeNull();
+    expect(incompleteSubstrateWarning(makeRuntimeConfig(makeSubConfig({ enabled: false, host: "" })))).toBeNull();
+    expect(incompleteSubstrateWarning(makeRuntimeConfig(makeSubConfig({ host: "", kinds: [] })))).toBe(
+      "[substrate] skip reason=incomplete-config missing=kinds,host"
+    );
   });
 
   test("returns the substrate block when fully configured", () => {

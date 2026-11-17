@@ -25,6 +25,7 @@ import { extractRetryHint } from "./retry-hints";
 import { selectAdapterWithFallback } from "./adapter-probe";
 import {
   resolveSubstrateConfig,
+  incompleteSubstrateWarning,
   createSubstrateConnection,
   runSubstrateIntakeTick,
   runSubstrateWriteBack,
@@ -52,6 +53,7 @@ let bootPrepared = false;
 // ---------------------------------------------------------------------------
 let substrateDb: SubstrateDb | null = null;
 let substrateDbInitialized = false;
+let substrateIncompleteWarned = false;
 // Lease recovery: track last run time for cadence enforcement.
 let lastLeaseRecoveryAt = 0;
 
@@ -59,6 +61,7 @@ export function resetRuntimeForTests(): void {
   bootPrepared = false;
   substrateDb = null;
   substrateDbInitialized = false;
+  substrateIncompleteWarned = false;
   lastLeaseRecoveryAt = 0;
 }
 
@@ -211,6 +214,13 @@ export async function runOnce(db: Database, config: RuntimeConfig): Promise<Reco
     // can complete/fail the substrate job after execution.
     // ---------------------------------------------------------------------------
     const subConfig = resolveSubstrateConfig(config);
+    if (!subConfig && !substrateIncompleteWarned) {
+      const warning = incompleteSubstrateWarning(config);
+      if (warning) {
+        console.error(warning);
+        substrateIncompleteWarned = true;
+      }
+    }
     if (subConfig) {
       // Lazy-init the substrate DB connection (credential resolved on success;
       // re-attempted next tick on failure so a transient credential / host
