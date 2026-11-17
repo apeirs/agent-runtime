@@ -149,11 +149,12 @@ trap 'rm -f "$probe_err"' EXIT
 probe_status=0
 substrate_enabled="$(AGENT_RUNTIME_CONFIG="$config" ~/.bun/bin/bun -e '
   import { loadConfig } from "./src/config";
-  import { resolveSubstrateConfig } from "./src/substrate";
+  import { resolveSubstrateConfig, missingSubstrateFields } from "./src/substrate";
   const { config } = await loadConfig(process.env.AGENT_RUNTIME_CONFIG || undefined);
   const active = resolveSubstrateConfig(config) !== null;
   if (!active && config.substrate?.enabled === true) {
-    console.error("WARN: substrate.enabled is true but credential, kinds or slotId is empty; substrate stays off");
+    const missing = missingSubstrateFields(config.substrate).join(", ");
+    console.error(`WARN: substrate.enabled is true but these fields are empty: ${missing}; substrate stays off`);
   }
   console.log(active ? "1" : "0");
 ' 2>"$probe_err")" || probe_status=$?
@@ -170,6 +171,10 @@ if [[ "$substrate_enabled" == "1" ]]; then
   fi
   if ! ~/.bun/bin/bun add --no-save ../substrate-db; then
     echo "ERROR: substrate is enabled in $config but ../substrate-db could not be installed" >&2
+    exit 1
+  fi
+  if ! ~/.bun/bin/bun -e 'await import("@genesis-works/substrate-db")'; then
+    echo "ERROR: substrate is enabled in $config but @genesis-works/substrate-db does not load" >&2
     exit 1
   fi
 fi

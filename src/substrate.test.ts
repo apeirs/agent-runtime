@@ -50,6 +50,7 @@ mock.module("@genesis-works/substrate-db", () => ({
 // Import AFTER mock.module so the substrate module picks up the mock.
 import {
   resolveSubstrateConfig,
+  missingSubstrateFields,
   jobRowToTaskInput,
   createSubstrateConnection,
   loadSubstrateDb,
@@ -197,6 +198,18 @@ describe("resolveSubstrateConfig", () => {
 
   test("returns null when slotId is empty", () => {
     expect(resolveSubstrateConfig(makeRuntimeConfig(makeSubConfig({ slotId: "" })))).toBeNull();
+  });
+
+  test("returns null when host is missing or blank", () => {
+    expect(resolveSubstrateConfig(makeRuntimeConfig(makeSubConfig({ host: undefined })))).toBeNull();
+    expect(resolveSubstrateConfig(makeRuntimeConfig(makeSubConfig({ host: "  " })))).toBeNull();
+  });
+
+  test("missingSubstrateFields names every empty required field", () => {
+    expect(missingSubstrateFields(makeSubConfig())).toEqual([]);
+    expect(
+      missingSubstrateFields(makeSubConfig({ credential: "", kinds: [], slotId: " ", host: undefined }))
+    ).toEqual(["credential", "kinds", "slotId", "host"]);
   });
 
   test("returns the substrate block when fully configured", () => {

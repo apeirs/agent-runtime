@@ -158,22 +158,28 @@ export function resetSubstrateDbCache(): void {
 }
 
 // ---------------------------------------------------------------------------
-// resolveSubstrateConfig
-// Returns the validated SubstrateConfig, or null if substrate is disabled.
+// missingSubstrateFields / resolveSubstrateConfig
+// One rule for "is substrate usable": the runtime and the deploy probe both use it.
 // ---------------------------------------------------------------------------
 
+/** Names of the required substrate fields that are empty (enabled is checked separately). */
+export function missingSubstrateFields(sub: Partial<SubstrateConfig>): string[] {
+  const blank = (v: string | undefined) => !v || v.trim().length === 0;
+  const missing: string[] = [];
+  if (blank(sub.credential)) missing.push("credential");
+  if (!sub.kinds || sub.kinds.length === 0) missing.push("kinds");
+  if (blank(sub.slotId)) missing.push("slotId");
+  if (blank(sub.host)) missing.push("host");
+  return missing;
+}
+
+/** Returns the validated SubstrateConfig, or null if substrate is disabled or incomplete. */
 export function resolveSubstrateConfig(config: RuntimeConfig): SubstrateConfig | null {
   const sub = config.substrate;
   if (!sub || sub.enabled !== true) {
     return null;
   }
-  if (!sub.credential || sub.credential.trim().length === 0) {
-    return null;
-  }
-  if (!sub.kinds || sub.kinds.length === 0) {
-    return null;
-  }
-  if (!sub.slotId || sub.slotId.trim().length === 0) {
+  if (missingSubstrateFields(sub).length > 0) {
     return null;
   }
   return sub;
